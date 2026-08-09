@@ -1,65 +1,109 @@
 import os
+import glob
+import asyncio
 from pyrogram import Client, filters
 import yt_dlp
-import time
 
-# Apnar Credentials
+# Credentials
 API_ID = 33019465
 API_HASH = "02fe1be68e1f501bb36dcfc55e8014ca"
 BOT_TOKEN = "8899267959:AAFWw7wkitpkWABUr_lAOq66aZ1KiSzT2H8"
 
-# Pyrogram Client Setup
-app = Client("MyYtBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client("MasterYTBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Start Command Handler
+# Temporary downloads folder
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# Regex pattern for YouTube URLs (Shorts, Watch, Mobile Links)
+YT_REGEX = r'(https?://)?(www\.|m\.)?(youtube\.com|youtu\.be)/(watch\?v=|shorts/|[^\s]+)'
+
 @app.on_message(filters.command("start"))
-async def start_command(client, message):
+async def start_handler(client, message):
     await message.reply_text(
-        f"Hello {message.from_user.first_name}! 👋\n"
-        "Ami ekta YouTube downloader bot. Jekono YouTube video'r link ekhane send korun, ami download kore dibo."
+        "👋 **Assalamu Alaikum!**\n\n"
+        "Ami Master YouTube Downloader Bot. Group ba Inbox-e jekono YouTube Video/Shorts link din, ami instant download kore dibo."
     )
 
-# YouTube Link Handler
-@app.on_message(filters.text & filters.regex(r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/.+'))
-async def download_video(client, message):
-    url = message.text
-    status_msg = await message.reply_text("⏳ **Video process kora hocche, ektu opekha korun...** (Long video hole kichukhon somoy lagte pare)")
+@app.on_message(filters.text & filters.regex(YT_REGEX))
+async def yt_download_handler(client, message):
+    url = message.text.strip()
+    status_msg = await message.reply_text("⏳ **Video process kora hocche...** Ektu opekha korun.")
 
-    # yt-dlp Settings (Boro file manage korar jonno)
+    file_path = None
+
+    # YT-DLP Settings (Bypassing YouTube IP block & auto quality selection)
     ydl_opts = {
-        'format': 'best[ext=mp4]/best', # Best quality MP4 format
-        'outtmpl': '%(id)s.%(ext)s',     # File er nam save hobe video ID diye
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
         'quiet': True,
-        'max_filesize': 2000000000       # Telegram limit (2 GB max)
+        'no_warnings': True,
+        'max_filesize': 2000000000, # 2 GB Telegram Limit
+        'geo_bypass': True,
+        'nocheckcertificate': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web']
+            }
+        }
     }
 
     try:
-        # Video Download korche Railway server e
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            file_path = ydl.prepare_filename(info)
-            video_title = info.get('title', 'YouTube Video')
+        # Step 1: Download Video to Railway Local Storage
+        loop = asyncio.get_event_loop()
+        info = await loop.run_in_executor(None, lambda: download_yt(url, ydl_opts))
+
+        if not info:
+            await status_msg.edit_text("❌ Video info pawa jayni.")
+            return
+
+        video_title = info.get('title', 'YouTube Video')
+        video_id = info.get('id')
+
+        # Find exact downloaded file
+        downloaded_files = glob.glob(f"{DOWNLOAD_DIR}/{video_id}.*")
+        if not downloaded_files:
+            await status_msg.edit_text("❌ File save korte somossa hoyeche.")
+            return
+
+        file_path = downloaded_files[0]
 
         await status_msg.edit_text("✅ **Download Complete!** Ebar Telegram e upload kora hocche...")
 
-        # Server theke Telegram e user ke pathacche
+        # Step 2: Upload Video to Telegram (Group/Chat)
         await message.reply_video(
             video=file_path,
-            caption=f"🎬 **{video_title}**\n\n✅ Downloaded via Bot",
-            supports_streaming=True # Ete user video download korar agei play kore dekhte parbe
+            caption=f"🎬 **{video_title}**\n\n✅ Downloaded via Master Bot",
+            supports_streaming=True
         )
-        
-        # Upload complete howar por status message delete korche
+
         await status_msg.delete()
 
-        # Railway server theke file delete korche space bachanor jonno
-        if os.path.exists(file_path):
-            os.remove(file_path)
-
-    except yt_dlp.utils.DownloadError:
-        await status_msg.edit_text("❌ **Error:** Video ti download kora jacche na. File size ki 2GB er theke boro?")
     except Exception as e:
-        await status_msg.edit_text(f"❌ **Oshubidha hoyeche:** {str(e)}")
+        error_msg = str(e)
+        print(f"Error Log: {error_msg}")
+        await status_msg.edit_text(f"❌ **Error:** {error_msg[:150]}")
 
-print("Bot is running...")
+    finally:
+        # Step 3: GUARANTEED STORAGE CLEANUP
+        # Telegram e file chole jawar por Server storage static 0kb korar jonno file delete kora hocche
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                print(f"Cleaned server file: {file_path}")
+            except Exception as clean_err:
+                print(f"Cleanup Error: {clean_err}")
+
+        # Extra safety: Clean any leftovers in downloads folder
+        for f in glob.glob(f"{DOWNLOAD_DIR}/*"):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+
+def download_yt(url, opts):
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=True)
+
+print("🚀 Master YT Downloader Bot is Running smoothly...")
 app.run()
